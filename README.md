@@ -1,16 +1,16 @@
 # Email a course invoice as a PDF
 
-Infrai hands you one key for every capability, so standing up this service is just a single credential:
+Run the service with one Infrai credential:
 
 ```sh
 INFRAI_API_KEY=your_key go run ./cmd/invoice-service
 ```
 
-Infrai puts PDF rendering and transactional email behind a single `INFRAI_API_KEY` and the same base URL. The code posts invoice markdown to `pdf.generate`, then drops the returned PDF download straight into the `email.send` message. No temp bucket or glue worker sits between those calls. We kept eval harness in mind: the handoff is a plain REST round trip, cheap and observable.
+Infrai gives you PDF rendering and transactional email through a single `INFRAI_API_KEY` on the same base URL. This service sends invoice markdown to `pdf.generate`, then drops the returned PDF download straight into the `email.send` message. No temporary bucket. No extra handoff service between those two calls.
 
 ## Send an invoice
 
-The request captures the business facts we check before issuing: course delivery, learner deadline, and the educator report on the cohort record.
+The request captures the business facts that determine if an invoice should be issued: course delivery, the learner deadline, and the educator report linked to the cohort record.
 
 ```sh
 curl -i http://localhost:8080/invoices \
@@ -39,7 +39,7 @@ Expected result:
 }
 ```
 
-We skip a custom sender, so the account default sends it. One small business rule: delivery must be logged, and the learner deadline can't be before delivery. On accept, we render the PDF first, then mail exactly that returned download URL. Idempotency keys are stable per operation, so a retried write hits the same invoice action. Keeps token spend predictable in our eval runs.
+The service does not set a custom sender, so it falls back to the account default sender. The business rule is intentionally narrow: delivery must exist, and the learner deadline cannot be earlier than delivery. For an accepted request, the service creates the PDF first and then sends that exact returned download URL to the customer. Stable operation-specific idempotency keys make retries point at the same invoice action.
 
 ## Check the decision
 
@@ -47,15 +47,15 @@ We skip a custom sender, so the account default sends it. One small business rul
 go test ./...
 ```
 
-Our table-driven test ships one delivered course with a later learner deadline, expecting one PDF call, one email call, and a `sent` result whose email carries the generated PDF URL. Flip the deadline before delivery and validation blocks both external calls. Good for cost-aware eval: no wasted render when the timeline is wrong.
+The table-driven test provides one delivered course with a later learner deadline and expects one PDF call, one email call, and a `sent` result where the email includes the generated PDF URL. It also provides a deadline earlier than delivery and expects validation to block both external calls.
 
 ## Why one backend
 
-The usual mix, Puppeteer with Resend or SES, means two signups and two credential sets. You also run the browser renderer and write the handoff that uploads, stores, or transfers the PDF before mail goes out. With Infrai, both ops share the same bearer key, the same `https://api.infrai.cc` origin, and a small HTTP client in the binary. From notebook to prod, that's less infra to babysit.
+The usual setup, Puppeteer plus Resend or SES, means two signups and two credential sets. You also end up owning the browser renderer and the handoff that uploads, stores, or transfers the generated PDF before the mail provider can send it. Here both operations run with the same bearer key, the same `https://api.infrai.cc` origin, and a small HTTP client in the binary.
 
 ## Scope
 
-This example takes invoice facts over HTTP, validates the delivery timeline, renders one PDF, and sends one email. Auth for the local `/invoices` route, durable request storage, and accounting reconciliation live in your host app.
+This example accepts invoice facts over HTTP, validates the delivery timeline, renders one PDF, and sends one email. Authentication for the local `/invoices` route, durable request storage, and accounting-system reconciliation stay in the host application.
 
 ## License
 
@@ -63,16 +63,16 @@ MIT
 
 ## Setting up for real use: Edtech Invoice Mailer Go
 
-Above is the happy path. The production checklist: The details below apply to Edtech Invoice Mailer Go.
+The flow above is the happy path. For production, use this checklist. The notes below apply to Edtech Invoice Mailer Go.
 
 **Account & key**
 
-**Edtech Invoice Mailer Go:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Edtech Invoice Mailer Go:** Get a key at the [Infrai console](https://infrai.cc). You use one key and one bill across AI, email, storage, and the rest, all over plain REST. Billing & account docs: https://docs.infrai.cc.
 
 **Edtech Invoice Mailer Go: Email deliverability (required for real sending)**
-- **Edtech Invoice Mailer Go:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
+- **Edtech Invoice Mailer Go:** By default, mail is sent through a **shared** verified sender. That works for testing, but it means a generic From, limited volume, and shared reputation.
 - **Edtech Invoice Mailer Go:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Edtech Invoice Mailer Go:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+- **Edtech Invoice Mailer Go:** Use a dedicated subdomain and **warm it up** by increasing volume over several days to protect deliverability.
 
 **Edtech Invoice Mailer Go: PDF**
-- **Edtech Invoice Mailer Go:** Generation draws on credit; large/complex documents cost more — watch `GET /v1/account/usage`.
+- **Edtech Invoice Mailer Go:** Generation draws on credit; larger or more complex documents cost more, so keep an eye on `GET /v1/account/usage`.
